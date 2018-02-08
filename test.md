@@ -1,1134 +1,227 @@
-### 兼容代开开票组件接口自主终端服务端改造方案
-
-2018-01-31 马恺
-
-v1.0.0.4
-
-1.  **代开组件接口提供方法（报文见压缩包）：**
-
-    1.  开启金税盘-盘税号查询
-
-    2.  发票开具-写盘
-
-    3.  发票打印
-
-    4.  发票作废
-
-    5.  关闭金税盘
-
-2.  **流程说明：**
-
-    1.  原流程为：dk05 执行金三SWZJ.HXZG.FP.KJDKFP
-        开具代开发票接口，更新bszd_dk_ywzb的KJBZ与KJSJ字段；并将发票开票数据同步至防伪税控wl_fp表中，更新bszd_dk_ywzb的TBFWSKBZ与TBFWSKRQ字段；返回客户端成功标志，客户端模拟点击代开软件执行开票。
-
-    2.  现流程更改为：dkA5
-        组装代开组件接口调用发票开具的报文返回客户端，客户端接收到开票报文调用开票接口进行写盘，写盘成功获得接口返回开具的发票代码与发票号码；执行dkA6
-        服务端进行发票代码号码与库存中代码号码校验，通过后更新bszd_dk_ywzb的TBFWSKBZ与TBFWSKRQ字段，并执行金三SWZJ.HXZG.FP.KJDKFP
-        开具代开发票接口，更新bszd_dk_ywzb的KJBZ与KJSJ字段
-
-3.  **代码修改**：
-
-    1.  **struts-zzsfpdk-gt3.xml**
-
->   增加内容：
-
-\<!-- 新版代开组件接口组装写盘报文 dkA5 --\>
-
-\<action name="bszdFpxpXML" class="net.htjs.bszd.action.fpdk.BszdZzsfpDkAction"
-method="bszdFpxpXML"\>
-
-\<interceptor-ref name="params"\>\</interceptor-ref\>
-
-\</action\>
-
-\<!-- 新版代开组件接口开具成功后 更新bszd数据库 以及 在金三中开具发票 dkA6 --\>
-
-\<action name="bszdFpkjTbGt3"
-class="net.htjs.bszd.action.fpdk.BszdZzsfpDkAction" method="bszdFpkjTbGt3"\>
-
-\<interceptor-ref name="params"\>\</interceptor-ref\>
-
->   \</action\>
-
-1.  **BszdZzsfpDkAction.java**
-
->   增加内容：
-
-/\*\*
-
-\* 支持新版代开组件接口，生成开票接口所需开票报文
-
-\* 2018-01-31 makai
-
-\* 流程修改：dkA5
-进行开票组件开票报文组装返回客户端，客户端进行发票写盘，得到开具的发票代码号码
-
-\* dkA6
-客户端传入开具的代码号码，更新本地kjbz，同时进行金三发票开具操作，返回是否成功的结果
-
-\*/
-
-public void bszdFpxpXML() {
-
-try {
-
-Map \<String,String\> map = dljy();
-
-PrintWriter out = JsonHelp.getResponse().getWriter();
-
-if (!"dkA5".equals(map.get("serviceid"))) {
-
-map.put("code", "02");
-
-map.put("message", "业务种类错误！");
-
-output(map);
-
-return;
-
-}
-
-if (map.get("code").equals("00")) { //登录校验正常
-
-//校验是否重复开票，并返回代开组件的开票报文
-
-Map \<String,String\> mapKp = boBSZD_ZZSFP_DK.formatKpXML(map);
-
-if ("00".equals(mapKp.get("code"))) {
-
-//拼装纳税人和库存相关信息
-
-StringBuffer str = new StringBuffer("\<?xml version='1.0'
-encoding='gbk'?\>\<taXML xmlns='http://www.chinatax.gov.cn/dataspec/'
-cnname='办税终端交互信息'\>");
-
-str.append(getIdentity(map));
-
-str.append("\<dklc_id\>" + map.get("dklc_id") + "\</dklc_id\>");
-
-str.append("\<kjxx\>");
-
-//返回相应申请信息，供前台展示确认
-
-str.append("\<wspzhm\>" + mapKp.get("WSPZHM") + "\</wspzhm\>");
-
-str.append("\<xhfmc\>" + mapKp.get("NSRMC") + "\</xhfmc\>");
-
-str.append("\<xhfnsrsbh\>" + mapKp.get("NSRSBH") + "\</xhfnsrsbh\>");
-
-str.append("\<ghfmc\>" + mapKp.get("GHFMC") + "\</ghfmc\>");
-
-str.append("\<ghfnsrsbh\>" + mapKp.get("GHFNSRSBH") + "\</ghfnsrsbh\>");
-
-str.append("\<kpje\>" + mapKp.get("KPJE") + "\</kpje\>");
-
-// str.append("\<xhflxdh\>" + mapDk.get("XHFLXDH") + "\</xhflxdh\>");
-
-// str.append("\<xhfdz\>" + mapDk.get("XHFDZ") + "\</xhfdz\>");
-
-str.append("\<xhfdz_dh\>" + mapKp.get("XHFDZ") + " " + mapKp.get("XHFLXDH") +
-"\</xhfdz_dh\>");//销货方地址电话
-
-// str.append("\<xhfyhmc\>" + mapDk.get("XHFKHYHMC") + "\</xhfyhmc\>");
-
-// str.append("\<xhfyhzh\>" + mapDk.get("XHFYHZH") + "\</xhfyhzh\>");
-
-str.append("\<xhfyh\>" + mapKp.get("XHFKHYHMC") + " " + mapKp.get("XHFYHZH") +
-"\</xhfyh\>");//销货方银行 名字记帐号
-
-str.append("\<sfcfkjbz\>" + mapKp.get("SFCFKJBZ") + "\</sfcfkjbz\>"); //
-是否重复开具标志 是Y，否N
-
-str.append("\<kjbw\>\<![CDATA[" + mapKp.get("KJBW") + "]]\>\</kjbw\>"); //
-写盘报文
-
-str.append("\</kjxx\>");
-
-str.append(getErrorMessage(map));
-
-str.append("\</taXML\>");
-
-log.error("dkA5返回串:" + String.valueOf(str));
-
-out.println(DES.getEncString(String.valueOf(str), keystr, this.jmbz));
-
-out.flush();
-
-out.close();
-
-} else {
-
-output(mapKp);
-
-}
-
-} else { //登录校验出异常，返回
-
-output(map);
-
-}
-
-} catch (Exception e) {
-
-log.error(e.getMessage());
-
-Map mapEx = new HashMap();
-
-mapEx.put("code", "99");
-
-mapEx.put("message", "系统异常！信息：" + e.getMessage());
-
-output(mapEx);
-
-}
-
-}
-
-/\*\*
-
-\* 接收客户端获得开票组件开具的发票代码号码 与结存进行比对
-
-\* 在金三中进行发票开具操作
-
-\* 2018-01-31 makai
-
-\* 流程修改：dkA5
-进行开票组件开票报文组装返回客户端，客户端进行发票写盘，得到开具的发票代码号码
-
-\* dkA6
-客户端传入开具的代码号码，更新本地kjbz，同时进行金三发票开具操作，返回是否成功的结果
-
-\*/
-
-public void bszdFpkjTbGt3() {
-
-try {
-
-Map \<String,String\> map = dljy();
-
-PrintWriter out = JsonHelp.getResponse().getWriter();
-
-if (!"dkA6".equals(map.get("serviceid"))) {
-
-map.put("code", "02");
-
-map.put("message", "业务种类错误！");
-
-output(map);
-
-return;
-
-}
-
-if (map.get("code").equals("00")) { //登录校验正常
-
-//校验是否重复开票，并返回代开组件的开票报文
-
-Map \<String,String\> mapKp = boBSZD_ZZSFP_DK.checkFpjcAndGt3KjDkfp(map);
-
-if ("00".equals(mapKp.get("code"))) {
-
-if("Y".equals(map.get("TSMJRBZ"))&&"N".equals(map.get("NWWBZ"))){//接入浪潮&&内网电脑
-
-Map lcrzMap = new HashMap();
-
-//向浪潮回填开具日志
-
-lcrzMap.put("YWLX_DM", "010401");
-
-lcrzMap.put("SWJG_DM", map.get("SWJG_DM"));
-
-lcrzMap.put("YW_FLAG", "1");
-
-lcrzMap.put("DKZL", "1");//代开种类 增值税专票
-
-lcrzMap.put("IP", map.get("IP"));
-
-lcrzMap.put("TSMID", map.get("TSMID"));
-
-lcrzMap.put("MAC", map.get("MAC"));
-
-lcrzMap.put("YW_DESCRIPTION", "发票代开");
-
-boBSZD_ZZSFP_DK.fpdkrzfw(lcrzMap);
-
-}
-
-StringBuffer str = new StringBuffer("\<?xml version='1.0'
-encoding='gbk'?\>\<taXML xmlns='http://www.chinatax.gov.cn/dataspec/'
-cnname='办税终端交互信息'\>");
-
-str.append(getIdentity(map));
-
-str.append(getErrorMessage(map));
-
-str.append("\</taXML\>");
-
-log.error("dkA6返回串:" + String.valueOf(str));
-
-out.println(DES.getEncString(String.valueOf(str), keystr, this.jmbz));
-
-out.flush();
-
-out.close();
-
-} else {
-
-output(mapKp);
-
-}
-
-} else { //登录校验出异常，返回
-
-output(map);
-
-}
-
-} catch (Exception e) {
-
-log.error(e.getMessage());
-
-Map mapEx = new HashMap();
-
-mapEx.put("code", "99");
-
-mapEx.put("message", "保存金三代开发票开具信息异常---》" + e.getMessage());
-
-output(mapEx);
-
-}
-
->   }
-
-1.  **IBoBSZD_ZZSFP_DK.java**
-
->   增加内容：
-
-/\*\*
-
-\* 新版代开组件 组装开票所需报文 并校验是否重复开票
-
-\* makai
-
-\* 2018-01-31
-
-\* \@param mapPar
-
-\* \@return
-
-\* \@throws SaveException
-
-\*/
-
-public Map formatKpXML(Map mapPar) throws SaveException;
-
-/\*\*
-
-\* 校验发票开具的代码号码与结存是否一致，金三系统代开发票保存
-
-\* makai
-
-\* 2018-01-31
-
-\* \@param mapPar
-
-\* \@return
-
-\* \@throws SaveException
-
-\*/
-
->   public Map checkFpjcAndGt3KjDkfp(Map mapPar) throws SaveException;
-
-1.  **BoBSZD_ZZSFP_DKImpl.java**
-
->   增加内容：
-
-/\*\*
-
-\* 新版代开组件 组装开票所需报文 并校验是否重复开票
-
-\* makai
-
-\* 2018-01-31
-
-\* \@param mapPar
-
-\* \@return
-
-\* \@throws SaveException
-
-\*/
-
-\@Override
-
-public Map formatKpXML(Map mapPar) throws SaveException {
-
-Map map = new HashMap();
-
-try {
-
-String dklc_id = String.valueOf(mapPar.get("dklc_id"));
-
-//1，校验是否已经扣款，是否已经开具
-
-map.put("DKLC_ID", dklc_id);
-
-List ywzbList = this.getDao().queryForList("bszd.selectBSZD_DK_YWZB_byDKLC_ID",
-map);
-
-Map mapYwzb = (Map) ywzbList.get(0);
-
-if (!"Y".equals(mapYwzb.get("KKBZ"))) {
-
-map.put("code", "01");
-
-map.put("message", "该业务未开具,请确认流程是否正确!");
-
-return map;
-
-}
-
-//2，看是否已同步防伪税控
-
-String wspzhm = mapYwzb.get("WSPZHM").toString();
-
-/\*map.put("WSPZHM", wspzhm);
-
-List list_WL_FP =
-sqlMapClientTemplate.queryForList("fwsk.select_WL_FP_BY_WSPZHM", map);
-
-if (list_WL_FP.size() \> 0) {
-
-map.put("code", "00");
-
-map.put("message", "发票开具信息同步防伪税控成功!");
-
-return map;
-
-}\*/
-
-//2，看是否已同步防伪税控 同步成功后，做出相应的提示
-
-if ("Y".equals(mapYwzb.get("TBFWSKBZ"))) {
-
-map.put("code", "00");
-
-map.put("message", "该发票已开具，若未成功打印，请手动进行发票打印!");
-
-map.put("SFCFKJBZ", "Y");// 是否重复开具标志 是Y，否N
-
-return map;
-
-}
-
-//一窗式比对查询 begin
-
-/\*1、avc_dkbdbs取值规则：货物运输业小规模纳税人异地代开增值税专用发票，取值为Y否则为N
-
-2、avc_yddkbs取值规则：下列两种情况取值都应该为Y（只需满足一个条件）：
-
-1）货物运输业小规模纳税人异地代开增值税专用发票
-
-2）纳税人为报验登记纳税人\*/
-
-/\*01 受理
-
-02 筹建期
-
-03 正常
-
-04 停业
-
-05 非正常
-
-06 清算
-
-07 注销
-
-08 非正常户注销
-
-09 报验
-
-10 核销报验
-
-11 中断缴费
-
-12 恢复缴费
-
-99 其他\*/
-
-Map lsMap = new HashMap();
-
-lsMap.put("DJXH", mapYwzb.get("DJXH"));
-
-String ycsbdjg = "N";//一窗式比对结果 代开比对标识
-
-String ydbdbs = "N";//异地比对标识
-
-List DJ_HWYSXGMDKZZSFPList =
-this.getDao().queryForList("bszd.selectDJ_HWYSXGMDKZZSFP", lsMap);
-
-if(DJ_HWYSXGMDKZZSFPList!=null&&DJ_HWYSXGMDKZZSFPList.size()\>0){
-
-ycsbdjg = "Y";
-
-ydbdbs = "Y";
-
-}else{
-
-ycsbdjg ="N";
-
-lsMap.put("NSRSBH", mapYwzb.get("NSRSBH"));
-
-Map nsrMap = this.selectDJ_NSRXX_BY_NSRSBH(lsMap);
-
-if(nsrMap!=null && "09".equals(nsrMap.get("NSRZT_DM"))){//报验户
-
-ydbdbs = "Y";
-
-}else{
-
-ydbdbs = "N";
-
-}
-
-}
-
-//一窗式比对查询 end
-
-//3,同步发票开具信息到防伪税控
-
-// 增值税发票信息
-
-Map mapZzsfpPar = new HashMap();
-
-mapZzsfpPar.put("DKLC_ID", dklc_id);
-
-List zzsfpList =
-this.getDao().queryForList("bszd.selectBSZD_DK_ZZSFP_byDKLC_ID", mapZzsfpPar);
-
-Map mapZzsfp = (Map) zzsfpList.get(0);
-
-Map mapHlxxPar = new HashMap();
-
-mapHlxxPar.put("DKLC_ID", dklc_id);
-
-List\<Map\<String,String\>\> hlxxList =
-this.getDao().queryForList("bszd.selectBSZD_DK_ZZSFP_HLXX_byDKLC_ID",
-mapHlxxPar);
-
-//组装发票明细报文 begin
-
-StringBuilder hlmx = new StringBuilder("\<FPXX_SPXX\>");
-
-for (int i = 0; i \< hlxxList.size(); i++) {
-
-Map\<String,String\> mapHlxx = (Map) hlxxList.get(i);
-
-hlmx.append("\<SPMX\>");
-
-hlmx.append("\<SPHXZ\>0\</SPHXZ\>");//商品行性质：0普通商品行，1折扣行
-
-hlmx.append("\<SPMC\>").append(mapHlxx.get("HWLWMC")).append("\</SPMC\>");
-
-hlmx.append("\<GGXH\>").append(("".equals(mapHlxx.get("GGXH"))?"":mapHlxx.get("GGXH"))).append("\</GGXH\>");
-
-hlmx.append("\<JLDW\>").append(("".equals(mapHlxx.get("DWSLMC"))?"":mapHlxx.get("DWSLMC"))).append("\</JLDW\>");
-
-hlmx.append("\<SL\>").append(("".equals(mapHlxx.get("HLSL"))?"":mapHlxx.get("HLSL"))).append("\</SL\>");
-
-hlmx.append("\<DJ\>").append(("".equals(mapHlxx.get("DJ"))?"":mapHlxx.get("DJ"))).append("\</DJ\>");
-
-hlmx.append("\<JE\>").append(mapHlxx.get("JE")).append("\</JE\>");
-
-hlmx.append("\<SLV\>").append(mapHlxx.get("SLZSL")).append("\</SLV\>");
-
-hlmx.append("\<SE\>").append(mapHlxx.get("SE")).append("\</SE\>");
-
-hlmx.append("\</SPMX\>");
-
-}
-
-hlmx.append("\</FPXX_SPXX\>");
-
-//组装发票明细报文 end
-
-//组装发票开具主要内容业务报文 begin
-
-StringBuilder kjxx = new StringBuilder("\<?xml version=\\"1.0\\"
-encoding=\\"GBK\\"?\>");
-
-kjxx.append("\<FPFP\>");
-
-kjxx.append("\<DATA\>");
-
-kjxx.append("\<CertPassWord\>").append(mapPar.get("certpassword")).append("\</CertPassWord\>");
-
-kjxx.append("\<FP\>");
-
-kjxx.append("\<FPXX_PMXX\>");
-
-kjxx.append("\<InfoKind\>0\</InfoKind\>");//发票类型：0专票；2普票
-
-kjxx.append("\<InfoClientName\>").append(mapZzsfp.get("GHFNSRMC").toString()).append("\</InfoClientName\>");//购方纳税人名称
-
-kjxx.append("\<InfoClientTaxCode\>").append(mapZzsfp.get("GHFNSRSBH").toString()).append("\</InfoClientTaxCode\>");//购方纳税人识别号
-
-kjxx.append("\<InfoClientAddressPhone\>").append(mapZzsfp.get("GHFDZ").toString()).append("
-").append(mapZzsfp.get("GHFLXDH").toString()).append("\</InfoClientAddressPhone\>");//购方纳税人地址电话
-
-kjxx.append("\<InfoClientBankAccount\>").append(mapZzsfp.get("GHFYHYYWDMC").toString()).append("
-").append(mapZzsfp.get("GHFYHZH").toString()).append("\</InfoClientBankAccount\>");//购方纳税人银行信息
-
-kjxx.append("\<InfoSellerAddressPhone\>").append(mapZzsfp.get("XHFDZ").toString()).append("
-").append(mapZzsfp.get("XHFLXDH").toString()).append("\</InfoSellerAddressPhone\>");//销方纳税人地址电话
-
-kjxx.append("\<InfoSellerBankAccount\>").append(wspzhm).append("\</InfoSellerBankAccount\>");
-
-kjxx.append("\<YDBS\>").append("Y".equals(ydbdbs)?"1":"0").append("\</YDBS\>");//异地代开标识：
-1：异地代开；其他：非异地代开发票
-
-kjxx.append("\<DKBDBS\>").append("Y".equals(ycsbdjg)?"1":"0").append("\</DKBDBS\>");//代开比对标志：
-1：参与一窗式比对代开发票；其他：不参与一窗式比对代开发票
-
-kjxx.append("\<KPR\>").append(mapPar.get("SWRY_MC").toString()).append("\</KPR\>");
-
-if(mapPar.get("skr")!=null&&!"".equals(mapPar.get("skr").toString())){
-
-kjxx.append("\<SKR\>").append(mapPar.get("skr").toString()).append("\</SKR\>");
-
-}else{
-
-kjxx.append("\<SKR\>").append(mapPar.get("SWRY_MC").toString()).append("\</SKR\>");
-
-}
-
-if(mapPar.get("fhr")!=null&&!"".equals(mapPar.get("fhr").toString())){
-
-kjxx.append("\<FHR\>").append(mapPar.get("fhr").toString()).append("\</FHR\>");
-
-}else{
-
-kjxx.append("\<FHR\>").append(mapPar.get("SWRY_MC").toString()).append("\</FHR\>");
-
-}
-
-kjxx.append("\<InfoAmount\>").append(mapYwzb.get("DKSQJE").toString()).append("\</InfoAmount\>");//合计金额(不含税)
-
-kjxx.append("\<InfoTaxAmount\>").append(mapYwzb.get("YBSFE").toString()).append("\</InfoTaxAmount\>");//合计税额
-
-kjxx.append("\<BZ\>").append(mapZzsfp.get("BZ").toString()).append("\</BZ\>");
-
-kjxx.append("\<ZSXFMC\>").append(mapYwzb.get("NSRMC").toString()).append("\</ZSXFMC\>");//销方纳税人名称
-
-kjxx.append("\<ZSXFSH\>").append(mapYwzb.get("NSRSBH").toString()).append("\</ZSXFSH\>");//销方纳税人识别号
-
-kjxx.append("\</FPXX_PMXX\>");
-
-kjxx.append(hlmx.toString());
-
-kjxx.append("\</FP\>");
-
-kjxx.append("\</DATA\>");
-
-kjxx.append("\</FPFP\>");
-
-//组装技术报文
-
-StringBuilder jsbw = new StringBuilder("\<?xml version=\\"1.0\\"
-encoding=\\"GBK\\"?\>");
-
-jsbw.append("\<FPXT_COM_INPUT\>");
-
-jsbw.append("\<ID\>1201\</ID\>");
-
-jsbw.append("\<DATA\>").append(new
-BASE64Encoder().encodeBuffer(kjxx.toString().getBytes("GBK"))).append("\</DATA\>");
-
-jsbw.append("\</FPXT_COM_INPUT\>");
-
-//返回代开组件接口需要的开具报文
-
-map.put("KJBW", jsbw.toString());
-
-map.put("WSPZHM", wspzhm);
-
-map.put("NSRMC", mapYwzb.get("NSRMC").toString());
-
-map.put("NSRSBH", mapYwzb.get("NSRSBH").toString());
-
-map.put("GHFMC", mapZzsfp.get("GHFNSRMC").toString());
-
-map.put("GHFNSRSBH", mapZzsfp.get("GHFNSRSBH").toString());
-
-map.put("KPJE", mapYwzb.get("KPJE").toString());
-
-map.put("XHFDZ", mapZzsfp.get("XHFDZ").toString());
-
-map.put("XHFLXDH", mapZzsfp.get("XHFLXDH").toString());
-
-map.put("XHFKHYHMC", mapZzsfp.get("XHFYHYYWDMC").toString());
-
-map.put("XHFYHZH", mapZzsfp.get("XHFYHZH").toString());
-
-map.put("code", "00");
-
-map.put("SFCFKJBZ", "N"); //是否重复开具标志 是Y，否N
-
-return map;
-
-} catch (DaoException e) {
-
-String err = "添加出错-\>出错原因：" + e.getMessage();
-
-log.error(err, e);
-
-map.put("code", "99");
-
-map.put("message", err);
-
-throw new SaveException(err);
-
-} catch (Exception e) {
-
-map.put("code", "99");
-
-map.put("message", e.getMessage());
-
-e.printStackTrace();
-
-String err = "异常---》";
-
-log.error(err, e);
-
-}
-
-return map;
-
-}
-
-\@Override
-
-public Map checkFpjcAndGt3KjDkfp(Map mapPar) throws SaveException {
-
-Map map = new HashMap();
-
-try {
-
-String dklc_id = String.valueOf(mapPar.get("dklc_id"));
-
-//1，校验是否已经扣款，是否已经开具
-
-Map mapYwzbPar = new HashMap();
-
-mapYwzbPar.put("DKLC_ID", dklc_id);
-
-List ywzbList = this.getDao().queryForList("bszd.selectBSZD_DK_YWZB_byDKLC_ID",
-mapYwzbPar);
-
-Map mapYwzb = (Map) ywzbList.get(0);
-
-// 增值税发票信息
-
-Map mapZzsfpPar = new HashMap();
-
-mapZzsfpPar.put("DKLC_ID", dklc_id);
-
-List zzsfpList =
-this.getDao().queryForList("bszd.selectBSZD_DK_ZZSFP_byDKLC_ID", mapZzsfpPar);
-
-Map mapZzsfp = (Map) zzsfpList.get(0);
-
-//校验开具的发票代码号码与结存是否一致
-
-if(!mapPar.get("fpdm").toString().equals(mapZzsfp.get("FPDM").toString())
-
-\|\|!mapPar.get("fphm").toString().equals(mapZzsfp.get("FPHM").toString())){
-
-map.put("code", "02");
-
-map.put("message",
-"发票库存中的下一张发票代码为："+mapZzsfp.get("FPDM").toString()
-
-\+",发票号码为："+mapZzsfp.get("FPHM").toString()+"与金税盘开具的发票代码："
-
-\+mapPar.get("fpdm").toString()+"，发票号码："+mapPar.get("fphm").toString()+"不一致，请确认盘中票号与金三库存是否一致！");
-
-return map;
-
-}
-
-//更新主表防伪税控同步标志
-
-Map\<String,String\> fwskTbMap = new HashMap();
-
-fwskTbMap.put("DKLC_ID", dklc_id);
-
-fwskTbMap.put("TBFWSKBZ", "Y");
-
-fwskTbMap.put("TBFWSKRQ", BeansHelp.getCurStrDate(1));
-
-this.getDao().update("bszd.updateBSZD_DK_YWZB", fwskTbMap);
-
-//货劳信息
-
-/\*Map mapHlxxPar = new HashMap();
-
-mapHlxxPar.put("DKLC_ID", dklc_id);
-
-List hlxxList =
-this.getDao().queryForList("bszd.selectBSZD_DK_ZZSFP_HLXX_byDKLC_ID",
-mapHlxxPar);
-
-\*/
-
-Map mapParZcpz = new HashMap();
-
-mapParZcpz.put("ZD_BH", mapPar.get("ZD_BH"));
-
-List zcpzList =
-this.getDao().queryForList("bszd.selectBSZD_GL_ZDGL_ZCPZ_byZD_BH", mapParZcpz);
-
-Map mapZzpz = (Map) zcpzList.get(0);
-
-if ("Y".equals(mapYwzb.get("KJBZ"))) {
-
-map.put("code", "00");
-
-map.put("message", "已开具发票");
-
-return map;
-
-}
-
-//2，调用金三代开开具接口
-
-//开具发票信息VO
-
-Map mapParKjdkfp = new HashMap();
-
-mapParKjdkfp.put("SJRY", mapPar.get("SWRY_DM"));
-
-mapParKjdkfp.put("SJJG", mapPar.get("SWJG_DM"));
-
-mapParKjdkfp.put("SJGSDQ", mapYwzb.get("SJGSDQ"));
-
-mapParKjdkfp.put("ZFSQRQ", "");
-
-mapParKjdkfp.put("FPHM", mapZzsfp.get("FPHM"));
-
-mapParKjdkfp.put("FPZLDM", mapZzpz.get("FPZL"));
-
-mapParKjdkfp.put("DJXH", mapYwzb.get("DJXH"));
-
-mapParKjdkfp.put("KPRDM", mapPar.get("SWRY_DM"));
-
-mapParKjdkfp.put("FPKFDM", "");
-
-mapParKjdkfp.put("KPJE", mapYwzb.get("KPJE"));
-
-mapParKjdkfp.put("ZFRQ1", "");
-
-mapParKjdkfp.put("BZ", mapYwzb.get("BZ"));
-
-mapParKjdkfp.put("LZFPDM", "");
-
-mapParKjdkfp.put("FPDM", mapZzsfp.get("FPDM"));
-
-mapParKjdkfp.put("KJSWJGDM", mapPar.get("SWJG_DM"));
-
-mapParKjdkfp.put("DKSQUUID", mapYwzb.get("DKSQUUID"));
-
-mapParKjdkfp.put("ZFSQR", "");//作废申请人
-
-mapParKjdkfp.put("LZFPHM", "");//蓝字发票号码
-
-mapParKjdkfp.put("LRRDM", mapPar.get("SWRY_DM"));//录入人代码
-
-mapParKjdkfp.put("ZFYY", "");//作废原因
-
-mapParKjdkfp.put("XGRDM", "");//修改人代码
-
-mapParKjdkfp.put("ZFRDM", "");//作废人代码
-
-mapParKjdkfp.put("KJRQ", BeansHelp.getCurStrDate(1));//开具日期
-
-mapParKjdkfp.put("FPKJXXUUID", "");//发票开具信息UUID
-
-mapParKjdkfp.put("ZFBZ1", "N"); //作废标志
-
-/\*Map mapParTsnsr = new HashMap();
-
-mapParTsnsr.put("NSRSBH", mapPar.get("BAK_1"));
-
-List TsnsrList = this.getDao().queryForList("bszd.selectDJ_NSRXX_BY_NSRSBH",
-mapParTsnsr);
-
-if (TsnsrList.size() == 0) {
-
-map.put("code", "01");
-
-map.put("message", "特殊纳税人信息不存在");
-
-return map;
-
-}\*/
-
-mapParKjdkfp.put("TSNSRDJXH", mapPar.get("TDZSBMDJXH"));//特殊纳税人登记序号
-
-//代开发票类别
-
-mapParKjdkfp.put("DKFPLBDM", mapYwzb.get("DKFPLBDM"));
-
-//税务机关库房库存vo
-
-mapParKjdkfp.put("FPZLDM", mapZzpz.get("FPZL")); //发票种类代码
-
-mapParKjdkfp.put("SJGSDQ", mapYwzb.get("SJGSDQ"));
-
-mapParKjdkfp.put("FPKFDM", ""); //发票库房代码
-
-mapParKjdkfp.put("XZZHM", "");//发票终止号码
-
-mapParKjdkfp.put("XQSHM", "");//箱终止号码
-
-mapParKjdkfp.put("FPDM", mapZzsfp.get("FPDM"));
-
-mapParKjdkfp.put("FPQSHM", "");//发票起始号码
-
-mapParKjdkfp.put("BS", "");//本数
-
-mapParKjdkfp.put("XS", "");//箱数
-
-mapParKjdkfp.put("KFKCUUID", "");//库房库存UUID
-
-mapParKjdkfp.put("LRRDM", "");//录入人代码
-
-mapParKjdkfp.put("FPZTDM", "");//发票状态代码
-
-mapParKjdkfp.put("XGRDM", "");//修改人代码
-
-mapParKjdkfp.put("SWJGDM", mapPar.get("SWJG_DM"));//税务机关代码
-
-mapParKjdkfp.put("FPDMMC", "");//发票代码名称
-
-mapParKjdkfp.put("FPZLMC", "");//发票种类名称
-
-mapParKjdkfp.put("HBJXBZ", "");//换版缴销标志
-
-mapParKjdkfp.put("MXBFS", "");//每本份数
-
-mapParKjdkfp.put("PHCD", "");//发票面额
-
-mapParKjdkfp.put("JLDWDM", "");//计量单位代码
-
-mapParKjdkfp.put("FPJJ", "");//发票进价
-
-mapParKjdkfp.put("FPXJ", "");//发票销价
-
-mapParKjdkfp.put("KCFS", "");//库存份数
-
-//纳税人结存VO列表
-
-mapParKjdkfp.put("FS", "");//库存份数
-
-mapParKjdkfp.put("FPDM", mapZzsfp.get("FPDM"));
-
-mapParKjdkfp.put("SJGSDQ", mapYwzb.get("SJGSDQ"));//数据归属地区
-
-mapParKjdkfp.put("FPZLDM", mapZzpz.get("FPZL"));
-
-mapParKjdkfp.put("DJXH", mapYwzb.get("DJXH"));
-
-mapParKjdkfp.put("SWJGDM", mapPar.get("SWJG_DM"));
-
-mapParKjdkfp.put("SJGSDQ", mapYwzb.get("SJGSDQ"));//数据归属地区
-
-mapParKjdkfp.put("FPZZHM", "");
-
-mapParKjdkfp.put("LRRDM", "");//发票起始号码
-
-mapParKjdkfp.put("FPZLDM", mapZzpz.get("FPZL"));
-
-mapParKjdkfp.put("XGRDM", "");
-
-mapParKjdkfp.put("DJXH", mapYwzb.get("DJXH"));
-
-mapParKjdkfp.put("FPQSHM", mapZzsfp.get("FPHM"));//发票起始号码
-
-mapParKjdkfp.put("FS", "1");
-
-mapParKjdkfp.put("FPDM", mapZzsfp.get("FPDM"));//发票起始号码
-
-mapParKjdkfp.put("FPZZHM", mapZzsfp.get("FPHM"));
-
-mapParKjdkfp.put("FPZTDM", "");//发票起始号码
-
-mapParKjdkfp.put("LRRDM", "");//录入人代码
-
-mapParKjdkfp.put("FPZTDM", "");//发票状态代码
-
-mapParKjdkfp.put("XGRDM", "");//发票状态代码
-
-mapParKjdkfp.put("SWJGDM", mapPar.get("SWJG_DM"));//税务机关代码
-
-mapParKjdkfp.put("NSRJCUUID", "");//纳税人结存UUID
-
-Map mapRes = boBSZD_GT3_JK_FPDK.insert_KJDKFP(mapParKjdkfp);
-
-Map mapResHead = (Map) mapRes.get("head");
-
-if (!"0000".equals(mapResHead.get("jsCode"))) {
-
-String Message = String.valueOf(mapResHead.get("Message"));
-
-String Reason = String.valueOf(mapResHead.get("Reason"));
-
-map.put("code", "02");
-
-map.put("message", "核心征管异常：" + Message + "," + Reason);
-
-log.error("核心征管异常：" + Message + "," + Reason);
-
-return map;
-
-}
-
-//3，修改代开标识
-
-Map mapUpKjbz = new HashMap();
-
-mapUpKjbz.put("DKLC_ID", dklc_id);
-
-mapUpKjbz.put("KJBZ", "Y");
-
-mapUpKjbz.put("KJSJ", BeansHelp.getCurStrDate(0));
-
-this.getDao().update("bszd.updateBSZD_DK_YWZB", mapUpKjbz);
-
-//代开发票成功后更新票仓数量2015-10-14
-
-Map mapParGxPc = new HashMap();
-
-mapParGxPc.put("ZD_BH", mapPar.get("ZD_BH"));
-
-mapParGxPc.put("FPZL", mapZzpz.get("FPZL"));
-
-mapParGxPc.put("DQPCJCSL", 1);
-
-this.getDao().update("bszd.updateBSZD_GL_ZDGL_ZCPZ_JS", mapParGxPc);
-
-//调用查询代开申请信息，查询代开申请信息(后续考虑);
-
-map.put("code", "00");
-
-map.put("message", "成功");
-
-return map;
-
-} catch (DaoException e) {
-
-String err = "保存金三代开发票开具信息异常，数据库更新出错-\>出错原因：" +
-e.getMessage();
-
-log.error(err, e);
-
-map.put("code", "99");
-
-map.put("message", err);
-
-throw new SaveException(err);
-
-} catch (Exception e) {
-
-String err = "保存金三代开发票开具信息异常---》"+e.getMessage();
-
-log.error(err, e);
-
-map.put("code", "99");
-
-map.put("message", err);
-
-}
-
-return map;
-
-}
-
-1.  **XhdjXmlJx.java**
-
->   **修改内容：**
-
-//新版代开开票组件 新增协议 dkA5 dkA6
-
-if ("dkA5".equals(serviceid)) {
-
-if (!formatJY(map, "dklc_id", String.valueOf(
-
-readXml.getValue("taxml.routersession.dklc_id")), "流程标识不能为空！")) {
-
-return map;
-
-}
-
-if (!formatJY(map, "certpassword", String.valueOf(
-
-readXml.getValue("taxml.routersession.certpassword")),
-"金税盘证书口令不能为空！")) {
-
-return map;
-
-}
-
-map.put("skr", readXml.getValue("taxml.routersession.skr"));
-
-map.put("fhr", readXml.getValue("taxml.routersession.fhr"));
-
-}
-
-if ("dkA6".equals(serviceid)) {
-
-if (!formatJY(map, "dklc_id", String.valueOf(
-
-readXml.getValue("taxml.routersession.dklc_id")), "流程标识不能为空！")) {
-
-return map;
-
-}
-
-if (!formatJY(map, "fpdm", String.valueOf(
-
-readXml.getValue("taxml.routersession.fpdm")), "发票代码不能为空！")) {
-
-return map;
-
-}
-
-if (!formatJY(map, "fphm", String.valueOf(
-
-readXml.getValue("taxml.routersession.fphm")), "发票号码不能为空！")) {
-
-return map;
-
-}
-
-if (!formatJY(map, "kjsj", String.valueOf(
-
-readXml.getValue("taxml.routersession.kjsj")), "发票开具时间不能为空！")) {
-
-return map;
-
-}
-
-}
-
-1.  版本修改记录：
-
-    1.  v1.0.0.2
-        修改日期20180131，修改dkA5接收客户端发送的收款人复核人字段，以及增加XhdjXmlJx类的dkA5，dkA6客户端参数校验
-
-    2.  v1.0.0.3
-        修改日期20180203，修改dkA5组装技术报文时对业务报文采用GBK方式获得字节数组再进行base64加密，兼容Linux与windows服务器
-
-    3.  v1.0.0.4修改日期20180206，修改dkA5组装报文时销方银行账号节点为完税凭证号。
+**百旺自助终端资源申请**
+
+（终端类型包括：定额发售、增值税发售、专普票代开、认证、申报）
+
+防伪税控正式环境数据接口
+========================
+
+| 防伪税控数据库 | IP地址：                |      |                                                            |
+|----------------|-------------------------|------|------------------------------------------------------------|
+|                | SID或SERVICE_NAME：     |      |                                                            |
+|                | PORT：                  |      |                                                            |
+|                | 用户名：                |      |                                                            |
+|                | 密码：                  |      |                                                            |
+| 专票代开       | 对象                    | 权限 | 用途                                                       |
+|                | HTJS.HT_YBNSR_DAB       | 查询 | 查询纳税人所在税务机关                                     |
+|                | P_GET_FWSK_BSXX_HMDYJ   | 执行 | 获取需要验旧的发票信息                                     |
+|                | HTJS.WL_FP              | 查询 | 查询代开发票信息                                           |
+|                | HTJS.WL_FP_ZB           | 查询 | 查询代开发票明细信息                                       |
+|                | WBJK_WLFP_INS_DATA      | 执行 | 同步代开发票信息到防伪税控                                 |
+| 普票代开       | HTJS.WL_PP              | 查询 | 查询发票信息                                               |
+|                | HTJS.WL_PP_ZB           | 查询 | 查询发票信息                                               |
+|                | WBJK_WLFP_PTFP_INS_DATA | 执行 | 同步代开普通发票信息到防伪税控                             |
+| 认证           | HTJS.HT_YBNSR_DAB       | 查询 | 查询发票所属税务机关 (专票代开已申请过)                    |
+|                | HTJS.FP_SKFP_HZ         | 查询 | 查询企业开户信息，及同步防伪税控                           |
+|                | HTJS.WSRZ_QY_KHXX       | 查询 | 查询认证发票抵扣联明细，及认证通过后同步到防伪税控         |
+|                | HTJS.RZ_FPDKL_MX        | 查询 | 查询认证发票抵扣联明细清单，及认证通过后同步到防伪税控     |
+|                | HTJS.RZ_FPDKL_MX_QD     | 查询 | 查询认证发票抵扣联明细清单明细，及认证通过后同步到防伪税控 |
+|                | HTJS.RZ_FPDKL_MX_QDMX   | 查询 | 认证通过后同步到防伪税控                                   |
+|                | HTJS.RZ_FDKFP_YZ_MX     | 查询 | 认证通过后同步到防伪税控                                   |
+|                | HTJS.RZ_FDKFP_YZ_MX_QD  | 查询 | 查询企业开户信息                                           |
+|                | HTJS.CB_FPCGL_MX        | 查询 | 发票存根联明细                                             |
+
+货运后台数据库
+==============
+
+| 货运后台数据库 | IP地址：                      |        |                            |
+|----------------|-------------------------------|--------|----------------------------|
+|                | SID或SERVICE_NAME：           |        |                            |
+|                | PORT：                        |        |                            |
+|                | 用户名：                      |        |                            |
+|                | 密码：                        |        |                            |
+| 认证           | 对象                          | 权限   | 用途                       |
+|                | SKSKJ.SM_SKSKJDK_JG           | 查，增 | 查询认证结果，同步认证结果 |
+|                | SKSKJ.SM_SKSKJDK_JG_ZB        | 查，增 | 查询认证结果，同步认证结果 |
+|                | SKSKJ.SM_SKSKJDK_YHSBH        | 查     | 查询纳税人信息             |
+|                | SKSKJ.DM_GY_SWJG              | 查     | 查询税务机关信息           |
+|                | SKSKJ.PKG_IN_HYFP_WSBS_WSRZ包 | 执行   | 进行发票明文密文比对       |
+|                | SKSKJ.DJ_SKSKJDK_HMDGL        | 查     | 查询发票代码号码合法性     |
+| 验旧           | SKSKJ.P_GET_HYZZS_FPYJ        | 执行   | 发票验旧信息               |
+
+货运大厅认证地址、账号
+======================
+
+| 货运大厅认证地址                            |   |
+|---------------------------------------------|---|
+| 货运大厅认证登陆账号/密码(需要省级用户权限) |   |
+
+航信解密机地址，端口
+====================
+
+| IP地址： |   |
+|----------|---|
+| 端口号： |   |
+
+货运发行代理地址，端口
+======================
+
+| IP地址： |   |
+|----------|---|
+| 端口号： |   |
+
+金三正式环境数据接口
+====================
+
+| 金三数据库   | IP地址：                        |      |                                      |
+|--------------|---------------------------------|------|--------------------------------------|
+|              | SID或SERVICE_NAME：             |      |                                      |
+|              | PORT：                          |      |                                      |
+|              | 用户名：                        |      |                                      |
+|              | 密码：                          |      |                                      |
+| 发票发售终端 | 对象                            | 权限 | 用途                                 |
+|              | HX_DJ.DJ_NSRXX_KZ               | 查询 | 查询纳税人扩展信息                   |
+|              | HX_DJ.DJ_NSRXX                  | 查询 | 查询纳税人信息                       |
+|              | HX_RD.RD_NSRZGXX_JGB            | 查询 | 查询纳税人资格认定信息               |
+|              | HX_RD.RD_SFZRDXXB               | 查询 | 查询纳税人税费种认定信息             |
+|              | HX_FP.FP_LY                     | 查询 | 查询纳税人发票领用信息               |
+|              | HX_FP.FP_LY_MX                  | 查询 | 查询纳税人发票领用明细               |
+|              | HX_FP.FP_TP                     | 查询 | 查询纳税人发票退库信息               |
+|              | HX_FP.FP_TP_MX                  | 查询 | 查询纳税人发票退库明细               |
+|              | HX_FP.FP_PZHDGPRXX              | 查询 | 票种核定购票人信息                   |
+|              | HX_FP.FP_PZHDXX                 | 查询 | 发票票种核定信息表                   |
+|              | HX_ZS.ZS_HD_DQDEHD_JG           | 查询 | 查询定期定额结果表                   |
+|              | HX_CS_ZDY.CS_GY_SJZHDZB         | 查询 | 税务机关参数对照表                   |
+|              | HX_CS_ZDY.QX_SWJG_GW            | 查询 | 查询税务机关岗位                     |
+|              | HX_FP.FP_SWXZXK                 | 查询 | 查询税务行政许可信息                 |
+|              | HX_FP.FP_SWXZXK_ZGXE            | 查询 | 查询税务行政许可信息                 |
+|              | HX_FP.FP_SWXZXK_ZGXE_SQSP       | 查询 | 查询税务行政许可信息                 |
+|              | HX_FP.FP_SWXZXK_SQXX            | 查询 | 查询税务行政许可信息                 |
+| 发票代开     | HX_FP.FP_DK_SQ                  | 查询 | 发票代开申请表                       |
+|              | HX_FP.FP_DK_ZZSFP               | 查询 | 查询发票代开增值税发票信息           |
+|              | HX_FP.FP_DK_ZZSPTFP             | 查询 | 查询发票代开增值税普通发票信息       |
+|              | HX_FP.FP_DK_ZZSFP_HLMX          | 查询 | 查询发票代开增值税专用发票货劳明细表 |
+|              | HX_FP.FP_DK_ZZSPTFP_HLMX        | 查询 | 查询发票代开增值税普通发票货劳明细表 |
+|              | HX_FP.FP_DK_SFMX                | 查询 | 查询税费明细表                       |
+|              | HX_FP.FP_DK_YSYSKMX             | 查询 | 发票代开已使用税款明细表             |
+|              | HX_FP.FP_DK_FPKJXX              | 查询 | 查询发票代开开具信息表               |
+|              | HX_ZS.ZS_SKY_SFXY               | 查询 | 查询三方协议登记信息                 |
+|              | HX_ZS.ZS_HD_QTSZHD_JG           | 查询 | 查询其他税种核定信息                 |
+|              | HX_DM_ZDY.DM_KJ_JYGZ            | 查询 | 校验规则代码表                       |
+|              | HX_DM_ZDY.DM_GY_JDXZ            | 查询 | 街道乡镇代码表                       |
+|              | HX_DM_ZDY.DM_GY_SWJG            | 查询 | 查询税务机关表                       |
+|              | HX_DM_ZDY.DM_GY_SWRY            | 查询 | 查询税务人员表                       |
+|              | HX_DM_QG.DM_GY_JLDW             | 查询 | 查询计量单位代码表信息               |
+|              | HX_DM_QG.DM_GY_YHHB             | 查询 | 查询银行名称信息                     |
+|              | HX_DM_QG.DM_GY_ZSXM             | 查询 | 征收项目代码表                       |
+|              | HX_DM_QG.DM_GY_ZSPM             | 查询 | 征收品目代码表                       |
+|              | HX_DM_QG.DM_GY_XZQH             | 查询 | 行政区划代码表                       |
+|              | HX_DM_QG.DM_GY_HY               | 查询 | 行业代码表                           |
+|              | HX_DM_QG.DM_GY_GJHDQ            | 查询 | 查询国家地区                         |
+|              | HX_DM_QG.DM_GY_SFZJLX           | 查询 | 查询身份证件类型                     |
+|              | HX_DM_QG.DM_FP_FPZL             | 查询 | 查询发票种类                         |
+|              | HX_DM_QG.DM_PZ_PZZL             | 查询 | 查询票证种类                         |
+|              | HX_CS_ZDY.CS_PZ_PZZGB           | 查询 | 查询票证字轨                         |
+|              | GS_CXTJ.DJ_ZRR                  | 查询 | 查询登记自然人信息表                 |
+|              | HX_DJ.DJ_DJHGLGL                | 查询 | 查询登记户归类信息                   |
+|              | HX_DJ.DJ_HWYSXGMDKZZSFP         | 查询 | 查询异地代开发票                     |
+|              | HX_SB.SB_SBBD_ZZSYBNSR_YCSBDYGZ | 查询 | 增值税一般纳税人一窗式比对           |
+| 车购税       | 终端已申请                      |      |                                      |
+|              | HX_DJ.DJ_NSRXX                  | 查询 | 查询纳税人信息                       |
+|              | HX_DJ.DJ_NSRXX_KZ               | 查询 | 查询纳税人扩展信息                   |
+|              | GS_CXTJ.DJ_ZRR                  | 查询 | 查询登记自然人信息                   |
+|              | HX_DM_ZDY.DM_GY_SWJG            | 查询 | 查询税务机关信息                     |
+|              | HX_DM_QG.DM_PZ_PZZL             | 查询 | 票证种类代码                         |
+|              | HX_CS_ZDY.CS_PZ_PZZGB           | 查询 | 票证字轨表                           |
+|              | HX_FP.FP_PZHDGPRXX              | 查询 | 发票票种核定购票人信息               |
+|              | 车购税新增                      |      |                                      |
+|              | HX_DM_ZDY.DM_GY_GK              | 查询 | 查询国库信息                         |
+|              | HX_CS_ZDY.CS_ZS_SWJGGKDZB       | 查询 | 查询税务机关国库对照表               |
+|              | HX_SB.SB_CGS_SBBXBLSB           | 查询 | 车辆购置税纳税申报表                 |
+| 辽宁新增     | HX_DM_ZDY.DM_GY_YSFPBL          | 查询 | 预算分配比例代码表                   |
+|              | HX_DM_QG.DM_DJ_DJZCLX           | 查询 | 登记注册类型代码表                   |
+
+金三正式环境应用接口
+====================
+
+| EJB协议类型接入                  | OSB访问核心征管后端的系统编码（CHANNEL_ID）： |                                                                                      |                                                                              |
+|----------------------------------|-----------------------------------------------|--------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+|                                  | OSB访问核心征管后端的URL：                    |                                                                                      |                                                                              |
+|                                  | 上下文工厂：                                  | weblogic.jndi.WLInitialContextFactory                                                |                                                                              |
+|                                  | JNDI名：                                      | gt3.esb.ejb.AipEJBAdapter.NF.JEJB\#gt3.esb.ejb.adapter.client.IEsbXmlMessageReceiver |                                                                              |
+| 调用服务接口如下：               |                                               |                                                                                      |                                                                              |
+| 发票发售                         |                                               |                                                                                      |                                                                              |
+|                                  | HXZG_FP_00050                                 | SWZJ.HXZG.FP.CSHFPFSYW                                                               | 效检发售条件及提取基本信息初始化业务                                         |
+|                                  | HXZG_FP_00051                                 | SWZJ.HXZG.FP.BCFSXX                                                                  | 保存发售信息                                                                 |
+|                                  | HXZG_FP_00279                                 | SWZJ.HXZG.FP.CXNSRFPJC                                                               | 根据登记序号等条件查询纳税人发票结存                                         |
+|                                  | HXZG_FP_00057                                 | SWZJ.HXZG.FP.BCFPYJJXX                                                               | 保存发票验交旧信息                                                           |
+|                                  | HXZG_FP_00054                                 | SWZJ.HXZG.FP.BCFPTKCZ                                                                | 保存发票退库操作                                                             |
+|                                  | HXZG_FP_15087                                 | SWZJ.HXZG.FP.FXXPBZ                                                                  | 发票领用返写写盘标志                                                         |
+|                                  | HXZG_FP_15159                                 | SWZJ.HXZG.FP.BCLYXX                                                                  | 保存领用信息                                                                 |
+| 发票代开                         |                                               |                                                                                      |                                                                              |
+|                                  | HXZG_FP_10000                                 | SWZJ.HXZG.FP.CXWJKDKSQLB                                                             | 根据登记序号查询未开具的代开申请列表                                         |
+|                                  | HXZG_FP_10002                                 | SWZJ.HXZG.FP.ZFDKFP                                                                  | 作废代开的发票                                                               |
+|                                  | HXZG_FP_10011                                 | SWZJ.HXZG.FP.ZFDKSQ                                                                  | 作废代开申请信息                                                             |
+|                                  | HXZG_FP_10026                                 | SWZJ.HXZG.FP.BCDKSQZZS                                                               | 保存代开申请信息(增值税)                                                     |
+|                                  | HXZG_FP_10021                                 | SWZJ.HXZG.FP.CSHFPDKSQZZS                                                            | 校验并提取代开相关基本信息初始化代开申请业务(增值税)                         |
+|                                  | HXZG_FP_10016                                 | SWZJ.HXZG.FP.BCDKSQSHJG                                                              | 保存代开申请审核                                                             |
+|                                  | HXZG_FP_10013                                 | SWZJ.HXZG.FP.KJDKFP                                                                  | 开具代开发票                                                                 |
+|                                  | HXZG_ZS_10040                                 | SWZJ.HXZG.ZS.DKFPSSKK                                                                | 代开发票实时扣款                                                             |
+|                                  | HXZG_FP_10014                                 | SWZJ.HXZG.FP.CXDKWKJFPLB                                                             | 根据税务人员代码查询发票代开柜台库存未开具的发票信息列表                     |
+|                                  | HXZG_ZS_00996                                 | SWZJ.HXZG.ZS.CXSFXYXXBYDJXH                                                          | 根据登记序号获取三方协议信息                                                 |
+|                                  | HXZG_FP_15006                                 | SWZJ.HXZG.FP.CXDKSQXX                                                                | 查询代开申请信息                                                             |
+|                                  | HXZG_FP_10033                                 | SWZJ.HXZG.FP.CSHDKKJZZS                                                              | 校验并提取代开申请信息初始化代开开具业务(增值税)                             |
+|                                  | HXZG_ZS_00377                                 | SWZJ.HXZG.ZS.CXNSRWQJQSFXX                                                           | 根据登记序号查询纳税人未清缴（欠税费）信息                                   |
+|                                  | HXZG_FP_15155                                 | SWZJ.HXZG.FP.BCDKSQZZSPTFP                                                           | 保存增值税普通发票代开申请                                                   |
+|                                  | HXZG_FP_15003                                 | SWZJ.HXZG.FP.CXYJSFKPXX                                                              | 根据登记序号、代开发票类别提供税费明细信息供预缴开票                         |
+|                                  | HXZG_ZS_10043                                 | SWZJ.HXZG.ZS.DYYHDJKPZFPDKSQ                                                         | 打印银行端缴款凭证(发票代开申请)                                             |
+|                                  | HXZG_ZS_10028                                 | SWZJ.HXZG.ZS.SKYDZSPKKZTCX                                                           | 税库银电子税票扣款状态查询（实时扣款，批量扣款，银行端缴款，POS刷卡）        |
+|                                  | HXZG_DJ_00489                                 | SWZJ.HXZG.DJ.ZRRJJDJ                                                                 | 自然人间接登记                                                               |
+| 个体/小规模增值税申报新增        |                                               |                                                                                      |                                                                              |
+|                                  | HXZG_SB_00044                                 | SWZJ.HXZG.SB.ZZSXGMSBSQJKJHQQCSJ                                                     | 增值税小规模申报事前监控及获取期初数据                                       |
+|                                  | HXZG_SB_00045                                 | SWZJ.HXZG.SB.BCZZSXGMSB                                                              | 保存增值税小规模申报                                                         |
+|                                  | HXZG_SB_00492                                 | SWZJ.HXZG.SB.SZPMSBZTSBQXXXCX                                                        | 税种品目的申报状态、申报期限信息查询                                         |
+|                                  | HXZG_ZS_10006                                 | SWZJ.HXZG.ZS.CXYZQSXXBYDJXHYZPZXH                                                    | 查询应征欠税信息                                                             |
+|                                  | HXZG_ZS_10025                                 | SWZJ.HXZG.ZS.SKYSKJN                                                                 | 税库银三方协议提交缴款请求（税收）                                           |
+|                                  | HXZG_SB_00067                                 | SWZJ.HXZG.SB.BCSBZF                                                                  | 保存申报作废                                                                 |
+| 税收完税证明                     |                                               |                                                                                      |                                                                              |
+|                                  | HXZG_ZS_00330                                 | SWZJ.HXZG.ZS.CXWHKDZJFJL                                                             | 查询未开过的电子缴费记录                                                     |
+|                                  | HXZG_ZS_00331                                 | SWZJ.HXZG.ZS.UPDATEWSPZHKJL                                                          | 更新完税凭证换开记录                                                         |
+|                                  | HXZG_ZS_10039                                 | SWZJ.HXZG.ZS.ZFZKSSWSZMXX                                                            | 作废税收完税证明信息                                                         |
+|                                  | HXZG_PZ_00039                                 | SWZJ.HXZG.PZ.CXPZJCBYSWRYPLZL                                                        | 根据税务人员和票证种类查询结存                                               |
+| 车购税(包含税收完税证明所有权限) |                                               |                                                                                      |                                                                              |
+|                                  | GSGL_SB_00001                                 | SWZJ.GSGL.SB.CXZRRDJXXWBXT                                                           | 查询自然人登记信息                                                           |
+|                                  | GSGL_DJ_00001                                 | SWZJ.HXZG.DJ.ZRRJJDJ SWZJ.GSGL.DJ.BCZRRGJXXJJDJFW                                    | 自然人关键信息间接登记服务(先申请蓝色如有问题更换为黑色的，或直接两个都申请) |
+|                                  | HXZG_DJ_00004                                 | SWZJ.HXZG.DJ.CXNSRXXBYDJXHORNSRSBH                                                   | 根据登记序号或纳税人识别号查询纳税人信息                                     |
+|                                  | HXZG_DJ_00073                                 | SWZJ.HXZG.DJ.BCZZLSSWDJXX                                                            | 保存组织临时登记纳税人信息                                                   |
+|                                  | HXZG_PZ_00039                                 | SWZJ.HXZG.PZ.CXPZJCBYSWRYPLZL                                                        | 根据税务人员和票证种类查询结存                                               |
+|                                  | HXZG_SB_00067                                 | SWZJ.HXZG.SB.BCSBZF                                                                  | 保存申报作废                                                                 |
+|                                  | HXZG_SB_00081                                 | SWZJ.HXZG.SB.ClgzsClsbdhJk                                                           | 车辆购置税车辆识别代号监控                                                   |
+|                                  | HXZG_SB_00082                                 | SWZJ.HXZG.SB.CxClgzsCxCjxx                                                           | 查询车辆购置税车型车价信息                                                   |
+|                                  | HXZG_SB_00083                                 | SWZJ.HXZG.SB.ClgzsJs                                                                 | 车辆购置税计税                                                               |
+|                                  | HXZG_SB_00084                                 | SWZJ.HXZG.SB.BcClgzssb                                                               | 保存车辆购置税申报                                                           |
+|                                  | HXZG_SB_00087                                 | SWZJ.HXZG.SB.CxClgzswszmxxByClsbdh                                                   | 根据车辆识别代号查询车辆购置税完税证明信息                                   |
+|                                  | HXZG_SB_00088                                 | SWZJ.HXZG.SB.BcClgzsffxx                                                             | 保存并打印车辆购置税完税证明发放                                             |
+|                                  | HXZG_SB_00664                                 | SWZJ.HXZG.SB.CXCLWSZM                                                                | 查询车辆购置税完税证明信息                                                   |
+|                                  | HXZG_SB_00665                                 | SWZJ.HXZG.SB.ZFCLWSZM                                                                | 作废车辆购置税完税证明信息                                                   |
+|                                  | HXZG_SB_00808                                 | SWZJ.HXZG.SB.CXZJJSJGXXANDXJRQ                                                       | 查询申报车辆的最低计税价格及限缴日期                                         |
+|                                  | HXZG_ZS_00331                                 | SWZJ.HXZG.ZS.UPDATEWSPZHKJL                                                          | 更新完税凭证换开记录                                                         |
+|                                  | HXZG_ZS_10006                                 | SWZJ.HXZG.ZS.CXYZQSXXBYDJXHYZPZXH                                                    | 查询应征欠税信息                                                             |
+|                                  | HXZG_ZS_10007                                 | SWZJ.HXZG.ZS.DYYHDJKPZ                                                               | 打印银行端缴款凭证                                                           |
+|                                  | HXZG_ZS_10008                                 | SWZJ.HXZG.ZS.CXYHDJKPZWJKXX                                                          | 查询银行端缴款凭证未缴款信息                                                 |
+|                                  | HXZG_ZS_10028                                 | SWZJ.HXZG.ZS.SKYDZSPKKZTCX                                                           | 税库银电子税票扣款状态查询（实时扣款，批量扣款，银行端缴款，POS刷卡）        |
+|                                  | HXZG_ZS_10039                                 | SWZJ.HXZG.ZS.ZFZKSSWSZMXX                                                            | 作废税收完税证明信息                                                         |
+|                                  | HXZG_ZS_10065                                 | SWZJ.HXZG.ZS.YBZSKPFPTOJK                                                            | 保存税收缴款书(税务收现专用)信息                                             |
+|                                  | HXZG_ZS_10127                                 | SWZJ.HXZG.ZS.CXWHKDZJFJL                                                             | 查询未开过的电子缴费记录                                                     |
+|                                  | HXZG_SB_00080                                 | SWZJ.HXZG.SB.ClhgzxxDrAndJk                                                          | 车辆合格证信息扫描导入及监控                                                 |
+|                                  | HXZG_SB_00096                                 | SWZJ.HXZG.SB.IsHgzTrue                                                               | 车辆合格证真伪检测                                                           |
+
+服务器资源
+==========
+
+| 序号 | 推荐配置                            | 操作系统                 | 网络     | 用途            | IP | 用户名密码 |
+|------|-------------------------------------|--------------------------|----------|-----------------|----|------------|
+| 1    | CPU：4（双核+） 内存：8G 硬盘：500G | Windows 2003 /LINUX /AIX | 税务内网 | 数据库          |    |            |
+| 2    | CPU：4（双核+） 内存：8G 硬盘：500G | Windows 2003 /LINUX /AIX | 税务内网 | 应用            |    |            |
+| 3    |                                     | windows                  | 税务内网 | 开发测试使用    |    |            |
+| 4    |                                     | windows                  | 税务内网 | 开发测试使用    |    |            |
+| 5    |                                     | windows32位操作系统      |          | 解密服务dll使用 |    |            |
